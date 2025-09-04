@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Black Hole — Accretion Disk + Lensing Sandbox</title>
+<style>
+:root{
+--bg:#05060a; --glass: rgba(255,255,255,0.06);
+--accent: rgba(120,200,255,0.95);
+font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+html,body{height:100%; margin:0; background: radial-gradient(1200px 800px at 10% 10%, #0a0b12, var(--bg) 40%); color:#e6eef8; -webkit-font-smoothing:antialiased;}
+canvas{display:block; width:100%; height:100%; background:transparent;}
+.ui {
+position: absolute; inset: 18px auto auto 18px; width:360px;
+backdrop-filter: blur(8px) saturate(120%); background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)); border-radius:14px; padding:14px;
+box-shadow: 0 6px 30px rgba(2,6,23,0.7), inset 0 1px 0 rgba(255,255,255,0.02);
+border: 1px solid rgba(255,255,255,0.04);
+}
+h1{font-size:16px; margin:0 0 8px 0; display:flex; gap:8px; align-items:center;}
+.small{font-size:12px; color:rgba(230,238,248,0.75);}
+.row{display:flex; gap:8px; align-items:center; margin:8px 0;}
+label{font-size:12px; width:110px;}
+input[type=range]{flex:1}
+.btn{
+margin-left:auto; background:linear-gradient(90deg,var(--accent),#6ad1ff); color:#021; border:none; padding:6px 10px; border-radius:8px; cursor:pointer; font-weight:700;
+box-shadow: 0 6px 18px rgba(110,180,255,0.08);
+}
+.credits{position:absolute; right:18px; bottom:18px; font-size:12px; color:rgba(230,238,248,0.6)}
+select,input[type=number]{background:transparent; border:1px solid rgba(255,255,255,0.06); color:inherit; padding:6px; border-radius:8px;}
+.toggle{display:inline-flex; align-items:center; gap:6px;}
+.footer-note{font-size:11px; color:#9fb6d3; margin-top:8px;}
+.statbar{font-family:monospace; font-size:12px; margin-top:8px; color:#9fb6d3;}
+.control-grid{display:grid; grid-template-columns: 1fr 1fr; gap:8px;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="ui" id="ui">
+<h1>
+🕳️ Blackhole Sandbox
+<button class="btn" id="resetBtn">Reset</button>
+</h1>
+<div class="small">Pseudo-GR accretion disk + light bending + Doppler tint • Pure client HTML/JS</div>
+
+<div class="row">
+<label>Central Mass (GM)</label>
+<input id="mass" type="range" min="50" max="2000" value="400">
+<div style="width:56px;text-align:right" id="massVal">400</div>
+</div>
+
+<div class="row">
+<label>Spin (a, 0→1)</label>
+<input id="spin" type="range" min="0" max="0.99" step="0.01" value="0.5">
+<div style="width:56px;text-align:right" id="spinVal">0.50</div>
+</div>
+
+<div class="row">
+<label>Particles</label>
+<input id="count" type="range" min="500" max="8000" step="100" value="2400">
+<div style="width:56px;text-align:right" id="countVal">2400</div>
+</div>
+
+<div class="row">
+<label>Inner Radius</label>
+<input id="rMin" type="range" min="1" max="60" value="6">
+<div style="width:56px;text-align:right" id="rMinVal">6</div>
+</div>
+
+<div class="row">
+<label>Outer Radius</label>
+<input id="rMax" type="range" min="60" max="800" value="260">
+<div style="width:56px;text-align:right" id="rMaxVal">260</div>
+</div>
+
+<div class="row">
+<label>Emissivity</label>
+<input id="emiss" type="range" min="0.2" max="3" step="0.05" value="1">
+<div style="width:56px;text-align:right" id="emissVal">1.00</div>
+</div>
+
+<div class="row control-grid">
+<div>
+<label>Time Warp</label>
+<input id="timeWarp" type="range" min="0.05" max="8" step="0.05" value="1">
+</div>
+<div>
+<label>Trail Length</label>
+<input id="trail" type="range" min="0" max="0.98" step="0.01" value="0.9">
+</div>
+</div>
+
+<div class="row">
+<label>View Angle</label>
+<input id="incline" type="range" min="0" max="89" value="45">
+<div style="width:56px;text-align:right" id="inclineVal">45°</div>
+</div>
+
+<div class="row">
+<label>Render Mode</label>
+<select id="mode">
+<option value="particles">Particles</option>
+<option value="ribbons">Ribbons</option>
+<option value="bokeh">Bokeh Bloom</option>
+</select>
+<div style="margin-left:8px" class="toggle"><input type="checkbox" id="showEvent" checked> <span class="small">show photon ring</span></div>
+</div>
+
+<div class="statbar" id="stat">FPS: -- | Particles: -- | GPU: canvas</div>
+<div class="footer-note">Tip: increase mass & spin, crank inner radius low for dramatic lensing. Use Time Warp for slow-mo or hyperdrive.</div>
+</div>
+
+<div class="credits">Made for Aayush • Save as .html • Runs offline</div>
+
+<script>
+/*
+Black Hole Accretion + Lensing — single-file.
+- Uses canvas 2D (fast on many devices)
+- Particles orbit with v = sqrt(GM/r) approximate; spin affects ISCO-ish boundary
+- Lensing approx: ray-bending by shifting apparent angle by factor ~ GM / (r * (1 - cosTheta))
+- Doppler tint: particles moving toward viewer shift blue, away shift red
+- Trails via alpha fill on each frame (trail slider)
+- UI controls wired. Keep comments; tweak to taste.
+*/
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: true });
+let W = canvas.width = innerWidth;
+let H = canvas.height = innerHeight;
+
+function resize() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+addEventListener('resize', resize);
+
+const UI = {
+mass: document.getElementById('mass'),
+spin: document.getElementById('spin'),
+count: document.getElementById('count'),
+rMin: document.getElementById('rMin'),
+rMax: document.getElementById('rMax'),
+emiss: document.getElementById('emiss'),
+timeWarp: document.getElementById('timeWarp'),
+trail: document.getElementById('trail'),
+incline: document.getElementById('incline'),
+mode: document.getElementById('mode'),
+showEvent: document.getElementById('showEvent'),
+resetBtn: document.getElementById('resetBtn')
+};
+
+const labels = {
+massVal: document.getElementById('massVal'),
+spinVal: document.getElementById('spinVal'),
+countVal: document.getElementById('countVal'),
+rMinVal: document.getElementById('rMinVal'),
+rMaxVal: document.getElementById('rMaxVal'),
+emissVal: document.getElementById('emissVal'),
+inclineVal: document.getElementById('inclineVal'),
+stat: document.getElementById('stat'),
+trail: document.getElementById('trail')
+};
+
+let config = {
+GM: +UI.mass.value, spin: +UI.spin.value, count: +UI.count.value,
+rMin: +UI.rMin.value, rMax: +UI.rMax.value, emiss: +UI.emiss.value,
+timeWarp: +UI.timeWarp.value, trail: +UI.trail.value, incline: +UI.incline.value,
+mode: UI.mode.value, showEvent: UI.showEvent.checked
+};
+
+function updateLabels(){
+labels.massVal.textContent = config.GM.toFixed(0);
+labels.spinVal.textContent = config.spin.toFixed(2);
+labels.countVal.textContent = config.count;
+labels.rMinVal.textContent = config.rMin.toFixed(1);
+labels.rMaxVal.textContent = config.rMax.toFixed(0);
+labels.emissVal.textContent = config.emiss.toFixed(2);
+labels.inclineVal.textContent = config.incline + '°';
+}
+updateLabels();
+
+/* Particle system */
+let particles = [];
+function rand(a,b){return a + Math.random()*(b-a);}
+function initParticles(){
+particles = new Array(config.count);
+for(let i=0;i<config.count;i++){
+// distribute by density ~ r^-2 for thin disk feel
+const u = Math.random();
+const r = Math.pow(rand(config.rMin, config.rMax), 1); // could bias; keep simple
+const ang = Math.random()*Math.PI*2;
+const z = (Math.random()-0.5) * 2; // thin disk small thickness
+// position in disk plane (x,y)
+particles[i] = {
+r, ang, z,
+x: r*Math.cos(ang), y: r*Math.sin(ang),
+// velocity magnitude - Keplerian-ish v = sqrt(GM/r)
+v: Math.sqrt(config.GM / Math.max(r, 0.0001)),
+// phase & tweak for randomness
+phase: Math.random(),
+color: 0,
+trail: []
+};
+}
+}
+
+/* Helpers for projection and lensing (approximate) */
+function cameraProject(px, py, pz, inclineDeg){
+// rotate disk by incline along x-axis
+const inc = inclineDeg * Math.PI/180;
+// disk coords: x (radial), y (azimuth), z (thickness)
+// apply tilt: y' = y*cos(inc) - z*sin(inc), z' = y*sin(inc)+z*cos(inc)
+const y2 = py * Math.cos(inc) - pz * Math.sin(inc);
+const z2 = py * Math.sin(inc) + pz * Math.cos(inc);
+// simple perspective: map x,y2 onto screen; scale by zoom
+const zoom = Math.min(W,H)/ (config.rMax * 2 + 200);
+const sx = W/2 + px * zoom;
+const sy = H/2 + y2 * zoom;
+return {sx, sy, depth: z2};
+}
+
+/* Lensing function:
+We approximate gravitational deflection by shifting apparent angular position
+by deltaTheta ~ 4GM/(b c^2) in GR; we scale it so effect is visible:
+We'll compute a displacement vector toward the BH center with magnitude ~ lensStrength / distance^1.2
+*/
+function lensOffset(screenX, screenY, strength=1.0){
+const cx = W/2, cy = H/2;
+const dx = screenX - cx, dy = screenY - cy;
+const dist = Math.sqrt(dx*dx + dy*dy) + 1e-6;
+const b = dist;
+// lens factor tuned:
+const lens = (config.GM * 1500) / Math.pow(b, 1.6) * 0.00008 * strength;
+return {dx: -dx * lens, dy: -dy * lens};
+}
+
+/* Doppler / redshift color mapping:
+For orbital motion relative to line of sight, compute radial component of velocity toward camera.
+We'll tint toward blue if v_z > 0 (toward), red if away. Also mod brightness by emissivity and local radius.
+*/
+function dopplerTint(v, angleToCamera, emissivity, r){
+// v: scalar orbital speed; angleToCamera: angle between velocity vector and camera line-of-sight (-1..1)
+const dop = Math.tanh( (v/200) * angleToCamera ); // normalized
+// base color from emissivity and radius (hotter inside)
+const temp = Math.max(0.2, (3.0 * (1 / Math.max(1,r/50)) * emissivity));
+// build rgb
+const rCol = Math.max(0, Math.min(255, (200 * (1 - dop) * temp)));
+const gCol = Math.max(0, Math.min(255, (140 * temp)));
+const bCol = Math.max(0, Math.min(255, (200 * (1 + dop) * temp)));
+return `rgba(${Math.round(rCol)},${Math.round(gCol)},${Math.round(bCol)},`;
+}
+
+/* Main loop */
+let last = performance.now();
+let fpsSmooth = 60;
+let frames = 0, fpsTime = 0;
+
+function draw(now){
+const dt = Math.min(0.06, (now - last)/1000) * config.timeWarp; last = now;
+// trails: fade by drawing translucent rect over canvas
+ctx.fillStyle = `rgba(3,6,12,${1 - config.trail})`;
+ctx.fillRect(0,0,W,H);
+
+// Draw central black hole (event horizon and photon ring)
+const bhRadius = Math.max(12, Math.sqrt(config.GM) * 2.2); // artistic scale
+// shadow
+ctx.beginPath();
+ctx.fillStyle = '#000';
+ctx.arc(W/2, H/2, bhRadius, 0, Math.PI*2);
+ctx.fill();
+
+// photon ring (visual)
+if(UI.showEvent.checked){
+const ringR = bhRadius * 2.6;
+const g = ctx.createRadialGradient(W/2, H/2, ringR*0.85, W/2, H/2, ringR*1.6);
+g.addColorStop(0, 'rgba(255,255,255,0.06)');
+g.addColorStop(0.5, 'rgba(120,200,255,0.06)');
+g.addColorStop(1, 'rgba(0,0,0,0)');
+ctx.beginPath();
+ctx.fillStyle = g;
+ctx.arc(W/2, H/2, ringR, 0, Math.PI*2);
+ctx.fill();
+}
+
+// update and render particles
+const zoom = Math.min(W,H)/(config.rMax*2 + 200);
+for(let i=0;i<particles.length;i++){
+const p = particles[i];
+// update angular position: dtheta/dt = v / r
+const localR = p.r;
+const v = Math.sqrt(config.GM / Math.max(localR,0.0001));
+// prograde/retro factor influenced by spin: spin>0 increases prograde speed near BH
+const spinBoost = 1 + config.spin * ( (config.rMax - localR) / (config.rMax) ) * 0.35;
+p.ang += dt * (v/localR) * spinBoost * (1 + 0.002 * Math.sin(p.phase*10 + now*0.0005));
+// slight radial jitter to mimic turbulence
+p.r += Math.sin(now*0.0005 + p.phase*10) * 0.02 * (1 + config.spin*0.6);
+
+// recompute cartesian
+const x = p.r * Math.cos(p.ang);
+const y = p.r * Math.sin(p.ang);
+const z = p.z * 12; // thickness scaling
+
+// projection
+const proj = cameraProject(x, y, z, config.incline);
+let sx = proj.sx, sy = proj.sy;
+// lensing: stronger for inner radii
+const lens = lensOffset(sx, sy, 1);
+sx += lens.dx;
+sy += lens.dy;
+
+// compute local line-of-sight velocity component for Doppler:
+// orbital velocity vector tangent to circle: (-sin, cos)
+const vx = -Math.sin(p.ang) * v * spinBoost;
+const vy = Math.cos(p.ang) * v * spinBoost;
+// camera LOS approximated after tilt: we take component of (vx,vy) projected to screen y direction sign
+const viewFactor = Math.sin(config.incline * Math.PI/180);
+const los = vx * 0 + vy * viewFactor; // rough approx: vy toward screen when positive
+const angleToCamera = Math.sign(los);
+
+// color & brightness
+const base = dopplerTint(v, angleToCamera, config.emiss, p.r);
+const brightness = Math.min(1.6, (1 / Math.max(0.08, p.r/40)) * config.emiss);
+const alpha = Math.min(0.95, 0.12 + brightness*0.18);
+
+ctx.beginPath();
+// render modes
+if(config.mode === 'particles'){
+const size = Math.max(0.6, 2.6 * (1 / Math.max(0.2, Math.sqrt(p.r/40))) * (1 + Math.sin(p.phase*7)*0.2));
+ctx.fillStyle = base + (alpha) + ')';
+ctx.arc(sx, sy, size, 0, Math.PI*2);
+ctx.fill();
+// small bloom: outer translucent circle
+const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, size*4);
+g.addColorStop(0, base + (alpha*0.6) + ')');
+g.addColorStop(1, 'rgba(0,0,0,0)');
+ctx.beginPath();
+ctx.fillStyle = g;
+ctx.arc(sx, sy, size*4, 0, Math.PI*2);
+ctx.fill();
+} else if(config.mode === 'ribbons'){
+// ribbon: draw a stretched ellipse representing motion blur along direction
+const len = Math.min(60, 18 * (1 + (200/p.r)));
+const angle = Math.atan2(vy, vx);
+ctx.save();
+ctx.translate(sx, sy);
+ctx.rotate(angle);
+ctx.beginPath();
+ctx.fillStyle = base + (alpha*0.8) + ')';
+ctx.ellipse(0, 0, len * 0.5, 1 + (4*(1/p.r)), 0, 0, Math.PI*2);
+ctx.fill();
+ctx.restore();
+} else { // bokeh
+const size = Math.max(1, 6 * (1 / Math.max(0.4, Math.sqrt(p.r/40))));
+const g = ctx.createRadialGradient(sx, sy, 0, sx, sy, size*3.5);
+g.addColorStop(0, base + (alpha) + ')');
+g.addColorStop(0.6, base + (alpha*0.2) + ')');
+g.addColorStop(1, 'rgba(0,0,0,0)');
+ctx.beginPath();
+ctx.fillStyle = g;
+ctx.arc(sx, sy, size*3, 0, Math.PI*2);
+ctx.fill();
+}
+
+// optional particle trail caching (lightweight)
+// store last screen pos
+p.last = {sx, sy};
+}
+
+// subtle vignette / chromatic fringe
+const vg = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.3, W/2, H/2, Math.max(W,H));
+vg.addColorStop(0, 'rgba(0,0,0,0)');
+vg.addColorStop(1, 'rgba(0,0,0,0.25)');
+ctx.fillStyle = vg;
+ctx.fillRect(0,0,W,H);
+
+// stats
+frames++;
+fpsTime += (now - last);
+// compute FPS manually every second
+if(performance.now() % 1000 < 16){ /* nothing */ }
+// smoother FPS
+fpsSmooth = fpsSmooth*0.97 + (1000 / Math.max(1, (now-last))) * 0.03;
+labels.stat.textContent = `FPS: ${Math.round(1000 / Math.max(1, now-last))} | Particles: ${particles.length} | Mode: ${config.mode}`;
+
+requestAnimationFrame(draw);
+}
+
+/* Wire up UI events */
+function rebuild(){
+config.GM = +UI.mass.value;
+config.spin = +UI.spin.value;
+config.count = +UI.count.value;
+config.rMin = +UI.rMin.value;
+config.rMax = +UI.rMax.value;
+config.emiss = +UI.emiss.value;
+config.timeWarp = +UI.timeWarp.value;
+config.trail = +UI.trail.value;
+config.incline = +UI.incline.value;
+config.mode = UI.mode.value;
+config.showEvent = UI.showEvent.checked;
+updateLabels();
+// rebuild particles to new count/radii
+initParticles();
+}
+for(const el of [UI.mass, UI.spin, UI.count, UI.rMin, UI.rMax, UI.emiss, UI.timeWarp, UI.trail, UI.incline, UI.mode, UI.showEvent]){
+el.addEventListener('input', () => {
+// update incrementally
+config.GM = +UI.mass.value;
+config.spin = +UI.spin.value;
+config.count = +UI.count.value;
+config.rMin = +UI.rMin.value;
+config.rMax = +UI.rMax.value;
+config.emiss = +UI.emiss.value;
+config.timeWarp = +UI.timeWarp.value;
+config.trail = +UI.trail.value;
+config.incline = +UI.incline.value;
+config.mode = UI.mode.value;
+config.showEvent = UI.showEvent.checked;
+updateLabels();
+// if particle count changed significantly, reinit
+if(Math.abs(particles.length - config.count) > 200) initParticles();
+});
+}
+UI.resetBtn.addEventListener('click', ()=>{
+UI.mass.value = 400; UI.spin.value = 0.5; UI.count.value = 2400; UI.rMin.value = 6; UI.rMax.value = 260;
+UI.emiss.value = 1; UI.timeWarp.value = 1; UI.trail.value = 0.9; UI.incline.value = 45;
+rebuild();
+});
+
+/* Pointer interactivity: add temporary perturbation to orbits when clicking */
+let pointer = {x:0,y:0,down:false};
+canvas.addEventListener('pointerdown', (e)=>{
+pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY;
+// add local perturbation: nudge particles near click
+const cx = e.clientX, cy = e.clientY;
+for(let p of particles){
+// project particle to screen roughly to find closeness
+const x = p.r * Math.cos(p.ang), y = p.r * Math.sin(p.ang), z = p.z*12;
+const pr = cameraProject(x,y,z,config.incline);
+const dx = pr.sx - cx, dy = pr.sy - cy;
+const d = Math.sqrt(dx*dx + dy*dy);
+if(d < 120){
+p.ang += (Math.random()-0.5) * 0.4;
+p.r += (120 - d) * 0.02;
+}
+}
+});
+canvas.addEventListener('pointerup', ()=>pointer.down=false);
+
+/* init */
+resize();
+initParticles();
+requestAnimationFrame(draw);
+
+</script>
+</body>
+</html>
